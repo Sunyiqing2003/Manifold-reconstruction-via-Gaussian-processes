@@ -1,0 +1,21 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# LaTeX build products
+*.aux
+*.log
+*.nav
+*.out
+*.snm
+*.synctex.gz
+*.toc
+
+# Local reference material; keep the compiled presentation below.
+Manifold estimation via gp/*.pdf
+!Manifold estimation via gp/mrgap_presentation.pdf
+
+# Local Codex/slide-authoring instructions are not part of the benchmark.
+Manifold estimation via gp/AGENTS.md
+Manifold estimation via gp/references/

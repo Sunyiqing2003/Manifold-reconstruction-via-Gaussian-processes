@@ -1,0 +1,38 @@
+{
+  "profile": "pilot",
+  "repeats": 1,
+  "seed": 20260801,
+  "reference_n": 20000,
+  "noise_levels": [
+    0.0,
+    0.01,
+    0.02,
+    0.04,
+    0.06,
+    0.08,
+    0.12
+  ],
+  "sample_sizes": [
+    50,
+    100,
+    250,
+    500,
+    1000,
+    5000
+  ],
+  "mrgap_iterations": [
+    1,
+    2,
+    3,
+    4,
+    5
+  ],
+  "fresh_sample_for_every_n": true,
+  "official_manifold_fitting_source": "https://github.com/zhigang-yao/manifold-fitting/tree/master/Manifold%20Fitting/Matlab",
+  "manifolds": [
+    "cassini",
+    "rp3",
+    "torus",
+    "half_torus"
+  ]
+}

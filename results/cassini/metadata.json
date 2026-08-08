@@ -1,0 +1,28 @@
+{
+  "seed": 20260801,
+  "repeats": 20,
+  "epsilon": 0.3,
+  "delta": 0.6,
+  "dimension": 1,
+  "round_1": {
+    "amplitude": 0.014,
+    "length_scale_squared": 0.2,
+    "noise_variance": 0.002
+  },
+  "round_2": {
+    "amplitude": 0.048,
+    "length_scale_squared": 0.3,
+    "noise_variance": 2e-05
+  },
+  "existing_dataset_baseline": {
+    "observed_grmse": 0.05904643553179995,
+    "round1_grmse": 0.023041066983951836,
+    "round2_grmse": 0.022416041973324467,
+    "interpolation_grmse": 0.021526713566929895,
+    "min_epsilon_neighbors": 5,
+    "median_epsilon_neighbors": 8.0,
+    "min_delta_neighbors": 13,
+    "median_delta_neighbors": 18.0
+  },
+  "note": "Sensitivity scans use uniform theta samples and fixed paper hyperparameters."
+}
