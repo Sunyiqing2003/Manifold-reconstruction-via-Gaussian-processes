@@ -80,3 +80,48 @@ current purpose is narrower: test whether the GP/MLE layer is numerically
 stable, identify low-signal patches where the length scale is effectively
 unidentified, and compare GP posterior uncertainty with the directly
 computable frequentist sampling scale.
+
+## Circle sample-size and MLE-identifiability sweep
+
+`circle_gp_uq_stability.py` adds an explicit instability gate to the circle
+prototype and studies whether larger samples improve local GP fitting.
+A local GP is flagged if either
+
+- near-optimal multistart solutions disagree on `ell` by more than a specified
+  ratio (default `2x`), or
+- the fitted signal-to-noise ratio `A/s2` is below a threshold (default `0.01`).
+
+For a flagged patch, the point estimate falls back to a fixed-bandwidth
+Gaussian-weighted local-linear intercept.  This is deliberately a fallback
+rather than an artificial lower bound on the GP amplitude or length scale: the
+code reports lack of identifiability instead of forcing a nominally stable MLE.
+Both branches are linear smoothers and therefore retain the leading sampling
+variance formula `Omega = sigma^2 ||a||^2`.
+
+The default sweep is
+
+```bash
+python experiments/circle_gp_uq_stability.py
+```
+
+which uses sample sizes `600 1200 2400 4800` and three random seeds.  A quick
+preflight run is
+
+```bash
+python experiments/circle_gp_uq_stability.py \
+  --sample-sizes 600 1200 2400 4800 \
+  --seeds 20260824 \
+  --centers 8 \
+  --random-starts 0
+```
+
+Outputs go to `results/circle_gp_uq_stability/` and include `raw_scan.csv`,
+`summary.csv`, `stability_vs_n.png`, and `mae_vs_n.png`.
+
+The main diagnostic question is not whether the MLE length scale converges to a
+single fixed numerical value as `n` grows.  Rather, the experiment separates
+three issues: local effective sample size, marginal-likelihood identifiability,
+and reconstruction error.  This distinction matters because prediction can
+stabilize with increasing sample size even when the GP length scale remains a
+weakly identified nuisance parameter in some nearly flat/noise-dominated
+patches.
