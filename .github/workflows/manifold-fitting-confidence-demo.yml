@@ -1,0 +1,28 @@
+name: manifold-fitting-confidence-demo
+
+on:
+  pull_request:
+    paths:
+      - "experiments/manifold_fitting_confidence_demo.py"
+      - "benchmark/manifold_benchmark.py"
+      - ".github/workflows/manifold-fitting-confidence-demo.yml"
+  workflow_dispatch:
+
+jobs:
+  quick-demo:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: pip install numpy scipy matplotlib
+      - name: Run quick circle/ellipse confidence demo
+        run: python experiments/manifold_fitting_confidence_demo.py --quick
+      - name: Upload demo results
+        uses: actions/upload-artifact@v4
+        with:
+          name: manifold-fitting-confidence-demo
+          path: results/manifold_fitting_confidence_demo/
+          if-no-files-found: error
