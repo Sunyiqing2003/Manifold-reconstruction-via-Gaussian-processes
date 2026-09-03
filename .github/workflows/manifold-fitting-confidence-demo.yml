@@ -27,9 +27,24 @@ jobs:
         run: pip install numpy scipy matplotlib
       - name: Run quick circle/ellipse confidence demo
         run: python experiments/manifold_fitting_confidence_demo.py --quick
+      - name: Run targeted bias-dominated oracle scan
+        run: >-
+          python experiments/manifold_fitting_confidence_demo.py
+          --pilot-modes oracle
+          --n 8000
+          --sigmas 0.08
+          --h-factors 1.5
+          --mc-reps 20
+          --bootstrap 150
+          --population-n 60000
+          --grid-size 120
+          --dense-grid-size 1600
+          --output results/manifold_fitting_confidence_demo_highn
       - name: Upload demo results
         uses: actions/upload-artifact@v4
         with:
           name: manifold-fitting-confidence-demo
-          path: results/manifold_fitting_confidence_demo/
+          path: |
+            results/manifold_fitting_confidence_demo/
+            results/manifold_fitting_confidence_demo_highn/
           if-no-files-found: error
