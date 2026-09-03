@@ -1,0 +1,70 @@
+name: manifold-fitting-confidence-demo
+
+on:
+  push:
+    branches:
+      - "demo/manifold-fitting-confidence-band"
+    paths:
+      - "experiments/manifold_fitting_confidence_demo.py"
+      - "experiments/manifold_fitting_gp_confidence_demo.py"
+      - "benchmark/manifold_benchmark.py"
+      - ".github/workflows/manifold-fitting-confidence-demo.yml"
+  pull_request:
+    paths:
+      - "experiments/manifold_fitting_confidence_demo.py"
+      - "experiments/manifold_fitting_gp_confidence_demo.py"
+      - "benchmark/manifold_benchmark.py"
+      - ".github/workflows/manifold-fitting-confidence-demo.yml"
+  workflow_dispatch:
+
+jobs:
+  quick-demo:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: pip install numpy scipy matplotlib
+      - name: Run quick weighted-mean confidence demo
+        run: python experiments/manifold_fitting_confidence_demo.py --quick
+      - name: Run targeted bias-dominated weighted-mean scan
+        run: >-
+          python experiments/manifold_fitting_confidence_demo.py
+          --pilot-modes oracle
+          --n 8000
+          --sigmas 0.08
+          --h-factors 1.5
+          --mc-reps 20
+          --bootstrap 150
+          --population-n 60000
+          --grid-size 120
+          --dense-grid-size 1600
+          --output results/manifold_fitting_confidence_demo_highn
+      - name: Run quick GP-variance confidence demo
+        run: python experiments/manifold_fitting_gp_confidence_demo.py --quick
+      - name: Run moderate oracle GP-variance scan
+        run: >-
+          python experiments/manifold_fitting_gp_confidence_demo.py
+          --pilot-modes oracle
+          --n 2500
+          --sigmas 0.06
+          --h-factors 1.5
+          --mc-reps 10
+          --grid-size 48
+          --dense-grid-size 1200
+          --max-points 120
+          --population-n 1800
+          --population-repeats 4
+          --output results/manifold_fitting_gp_confidence_demo_oracle
+      - name: Upload demo results
+        uses: actions/upload-artifact@v4
+        with:
+          name: manifold-fitting-confidence-demo
+          path: |
+            results/manifold_fitting_confidence_demo/
+            results/manifold_fitting_confidence_demo_highn/
+            results/manifold_fitting_gp_confidence_demo/
+            results/manifold_fitting_gp_confidence_demo_oracle/
+          if-no-files-found: error
