@@ -1,6 +1,13 @@
 name: manifold-fitting-confidence-demo
 
 on:
+  push:
+    branches:
+      - "demo/manifold-fitting-confidence-band"
+    paths:
+      - "experiments/manifold_fitting_confidence_demo.py"
+      - "benchmark/manifold_benchmark.py"
+      - ".github/workflows/manifold-fitting-confidence-demo.yml"
   pull_request:
     paths:
       - "experiments/manifold_fitting_confidence_demo.py"
