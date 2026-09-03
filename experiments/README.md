@@ -125,3 +125,96 @@ and reconstruction error.  This distinction matters because prediction can
 stabilize with increasing sample size even when the GP length scale remains a
 weakly identified nuisance parameter in some nearly flat/noise-dominated
 patches.
+
+## Manifold Fitting confidence-band demo: circle and ellipse
+
+`manifold_fitting_confidence_demo.py` is the first numerical prototype for the
+new projection/image-set confidence-region direction.  It deliberately uses a
+**closed 1-dimensional preliminary manifold** and defines the final estimator as
+
+```text
+M_hat = G_hat_h(M_tilde),
+```
+
+so the center of the confidence region is itself a one-dimensional closed curve,
+not a set of independently denoised anchors.
+
+The demo uses a noisy unit circle and an ellipse with semi-axes `(1.4, 0.8)`.
+It supports two pilot modes:
+
+- `oracle`: use the true curve only as the preliminary parameter domain.  This
+  isolates the second-stage Manifold-Fitting-style refinement and its sampling
+  uncertainty;
+- `data`: split the sample, run the repository's Python port of Manifold Fitting
+  on the pilot pool, and convert its output to a closed radial curve before the
+  independent refinement step.
+
+The second-stage refinement estimates only a **normal displacement field** on the
+pilot curve.  It uses tangent bandwidth `h` and a normal gate of order `sigma`.
+The bootstrap holds the pilot fixed and resamples the independent refinement
+pool, so it is a conditional refinement-stage bootstrap matching the proposed
+sample-splitting theory.
+
+Three simultaneous-band diagnostics are compared:
+
+1. **stochastic-only**: a multiplier/nonparametric-bootstrap radius for the
+   refinement fluctuation;
+2. **oracle bias-aware**: stochastic radius plus a simulation-only population
+   bias envelope computed from a very large independent Monte Carlo sample;
+3. **oracle bias-corrected center**: subtract the same simulation-only population
+   displacement, then use the stochastic radius.
+
+The last two are deliberately labeled oracle diagnostics: they use the known
+simulation truth and are not proposed practical bias estimators.  Their purpose is
+to determine whether stochastic undercoverage disappears once the population
+smoothing/EIV displacement is accounted for.
+
+A quick run is
+
+```bash
+python experiments/manifold_fitting_confidence_demo.py --quick
+```
+
+A more stable Monte Carlo run is
+
+```bash
+python experiments/manifold_fitting_confidence_demo.py \
+  --mc-reps 50 \
+  --bootstrap 300 \
+  --population-n 150000
+```
+
+Useful SNR/bandwidth scans are, for example,
+
+```bash
+python experiments/manifold_fitting_confidence_demo.py \
+  --sigmas 0.02 0.05 0.10 \
+  --h-factors 1.0 1.5 2.0 \
+  --mc-reps 50 --bootstrap 300
+```
+
+Outputs go to `results/manifold_fitting_confidence_demo/`:
+
+- `raw_metrics.csv`: every Monte Carlo replicate;
+- `summary.csv`: empirical simultaneous coverage and error summaries;
+- `coverage_summary.png`: stochastic-only versus oracle bias-aware coverage;
+- `bias_vs_stochastic.png`: population-bias envelope divided by the bootstrap
+  radius;
+- `representative_*.png`: fitted curve and simultaneous normal-band boundaries;
+- `metadata.json`: complete settings and interpretation caveats.
+
+The main go/no-go patterns are:
+
+- **oracle pilot + stochastic-only undercoverage, but oracle bias-aware coverage
+  near nominal**: the primary obstruction is population bias, consistent with the
+  current theory discussion;
+- **oracle pilot still undercovers after adding the oracle bias envelope**:
+  bootstrap/process approximation or geometric conversion to a tube is failing;
+- **oracle pilot works but data-pilot undercovers**: pilot-manifold uncertainty is
+  first-order and must be included in the theory;
+- **circle works while ellipse fails near high-curvature tips**: the relevant
+  object is local curvature/SNR rather than a single global noise level.
+
+This experiment is diagnostic only.  Coverage is checked on a dense grid, and the
+bootstrap is conditional on the pilot.  No asymptotic coverage claim is made by the
+script.
