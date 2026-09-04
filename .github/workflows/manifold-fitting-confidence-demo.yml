@@ -8,6 +8,7 @@ on:
       - "experiments/manifold_fitting_confidence_demo.py"
       - "experiments/manifold_fitting_gp_confidence_demo.py"
       - "experiments/plot_manifold_fitting_gp_tube.py"
+      - "experiments/manifold_fitting_gp_mfcenter_demo.py"
       - "benchmark/manifold_benchmark.py"
       - ".github/workflows/manifold-fitting-confidence-demo.yml"
   pull_request:
@@ -15,6 +16,7 @@ on:
       - "experiments/manifold_fitting_confidence_demo.py"
       - "experiments/manifold_fitting_gp_confidence_demo.py"
       - "experiments/plot_manifold_fitting_gp_tube.py"
+      - "experiments/manifold_fitting_gp_mfcenter_demo.py"
       - "benchmark/manifold_benchmark.py"
       - ".github/workflows/manifold-fitting-confidence-demo.yml"
   workflow_dispatch:
@@ -71,6 +73,17 @@ jobs:
           --dense-grid-size 2400
           --noise-multiplier 1.96
           --output results/manifold_fitting_gp_tube_visualization
+      - name: Compare MF center with GP-refined center and build MF-centered GP tube
+        run: >-
+          python experiments/manifold_fitting_gp_mfcenter_demo.py
+          --n 3000
+          --sigma 0.06
+          --h-factor 1.5
+          --grid-size 60
+          --dense-grid-size 2400
+          --mc-reps 20
+          --noise-multiplier 1.96
+          --output results/manifold_fitting_gp_mfcenter_demo
       - name: Upload demo results
         uses: actions/upload-artifact@v4
         with:
@@ -81,4 +94,5 @@ jobs:
             results/manifold_fitting_gp_confidence_demo/
             results/manifold_fitting_gp_confidence_demo_oracle/
             results/manifold_fitting_gp_tube_visualization/
+            results/manifold_fitting_gp_mfcenter_demo/
           if-no-files-found: error
