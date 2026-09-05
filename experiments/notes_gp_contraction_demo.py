@@ -108,7 +108,7 @@ def local_gp(
     amplitude: float,
     length_scale: float,
 ) -> tuple[float, float, float]:
-    """Zero-mean scalar GP at q*=0 and its exact linear-smoother variance."""
+    """Constant-mean universal kriging at q*=0 and its smoother variance."""
     diff = q[:, None, :] - q[None, :, :]
     distance_sq = np.sum(diff * diff, axis=2)
     kernel = amplitude * np.exp(-distance_sq / (2.0 * length_scale**2))
@@ -121,10 +121,21 @@ def local_gp(
             covariance + 1e-7 * max(1.0, amplitude, sigma**2) * np.eye(len(q)),
             check_finite=False,
         )
+    ones = np.ones(len(q))
+    inverse_ones = cho_solve(factor, ones, check_finite=False)
+    information = float(ones @ inverse_ones)
+    mean_weights = inverse_ones / information
     k0 = amplitude * np.exp(-np.sum(q * q, axis=1) / (2.0 * length_scale**2))
-    weights = cho_solve(factor, k0, check_finite=False)
+    inverse_k0 = cho_solve(factor, k0, check_finite=False)
+    reproduction_gap = 1.0 - float(ones @ inverse_k0)
+    weights = inverse_k0 + mean_weights * reproduction_gap
     prediction = float(weights @ s)
-    posterior_variance = max(amplitude - float(k0 @ weights), 0.0)
+    posterior_variance = max(
+        amplitude
+        - float(k0 @ inverse_k0)
+        + reproduction_gap**2 / information,
+        0.0,
+    )
     frequentist_variance = sigma**2 * float(weights @ weights)
     return prediction, math.sqrt(posterior_variance), math.sqrt(frequentist_variance)
 
@@ -456,6 +467,7 @@ def write_report(path: Path, summary: list[dict[str, object]], args: argparse.Na
         f"- `n={args.n}`, `sigma={args.sigma}`, `{args.mc_reps}` Monte Carlo replicates per manifold;",
         f"- query offset `c_offset*sigma={args.c_offset}*sigma`;",
         f"- GP amplitude `A={args.amplitude_factor}*sigma^2`, length scale `ell={args.c_ell}*r`;",
+        "- constant unknown GP mean handled by universal kriging;",
         "- finite-grid Bonferroni multiplier for UQ visualization.",
         "",
         "## Point-estimation results",
@@ -599,6 +611,7 @@ def main() -> None:
         "dense_grid_size": args.dense_grid_size,
         "amplitude": f"{args.amplitude_factor} * sigma^2",
         "length_scale": f"{args.c_ell} * r",
+        "gp_mean": "unknown constant estimated by universal kriging",
         "bandwidth_formula": {"r0": "2r", "r": "5 sigma/log10(n_contraction)", "R": "10 sigma sqrt(log(1/sigma))/log10(n_contraction)"},
         "circle_eiv_bias_reference": args.sigma**2 / 2.0,
         "uq_label": "finite-grid conditional GP simultaneous band",

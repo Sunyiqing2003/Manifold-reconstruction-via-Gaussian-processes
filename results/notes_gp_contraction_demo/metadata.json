@@ -10,6 +10,7 @@
   "dense_grid_size": 2400,
   "amplitude": "1.0 * sigma^2",
   "length_scale": "1.0 * r",
+  "gp_mean": "unknown constant estimated by universal kriging",
   "bandwidth_formula": {
     "r0": "2r",
     "r": "5 sigma/log10(n_contraction)",
