@@ -1,0 +1,20 @@
+{
+  "algorithm": "Yao ball direction + shared cylinder average/GP(q=0)",
+  "truth_used_by_estimator": false,
+  "sample_splitting": "half scaffold, half contraction",
+  "query_offset_c_sigma": 1.0,
+  "n": 3000,
+  "sigma": 0.06,
+  "mc_reps": 20,
+  "grid_size": 60,
+  "dense_grid_size": 2400,
+  "amplitude": "1.0 * sigma^2",
+  "length_scale": "1.0 * r",
+  "bandwidth_formula": {
+    "r0": "2r",
+    "r": "5 sigma/log10(n_contraction)",
+    "R": "10 sigma sqrt(log(1/sigma))/log10(n_contraction)"
+  },
+  "circle_eiv_bias_reference": 0.0018,
+  "uq_label": "finite-grid conditional GP simultaneous band"
+}
