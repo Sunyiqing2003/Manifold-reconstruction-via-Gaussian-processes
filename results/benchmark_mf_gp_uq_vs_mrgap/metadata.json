@@ -1,0 +1,27 @@
+{
+  "runtime_seconds": 220.6746232919977,
+  "geometries": [
+    "circle",
+    "ellipse",
+    "torus",
+    "circle_r0.5",
+    "circle_r2.0"
+  ],
+  "n_values": [
+    500,
+    1000,
+    3000
+  ],
+  "sigma_values": [
+    0.03,
+    0.06,
+    0.1
+  ],
+  "repeats": 3,
+  "final_repeats": 100,
+  "truth_use": "evaluation and explicitly labeled oracle-direction ablation only",
+  "mrgap_planar_parameters": "frozen Cassini first-round tuple",
+  "mrgap_torus_parameters": "frozen torus first-round tuple",
+  "torus_global_coverage": "not defined; local UQ scale diagnostics only",
+  "torus_orientation": "data-only estimated center and major radius"
+}

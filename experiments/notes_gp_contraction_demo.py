@@ -153,6 +153,7 @@ def fit_query(
     length_scale: float,
     min_ball: int,
     min_cylinder: int,
+    direction_override: np.ndarray | None = None,
 ) -> LocalFit:
     ball_idx = np.asarray(tree.query_ball_point(z, r0), dtype=int)
     ball_fallback = len(ball_idx) < min_ball
@@ -170,6 +171,12 @@ def fit_query(
         direction_signal = float(np.linalg.norm(candidate))
         ball_fallback = True
     direction = direction_vector / max(direction_signal, np.finfo(float).eps)
+    if direction_override is not None:
+        oracle = np.asarray(direction_override, dtype=float)
+        oracle_norm = float(np.linalg.norm(oracle))
+        if oracle.shape != z.shape or oracle_norm <= np.finfo(float).eps:
+            raise ValueError("direction_override must be a nonzero ambient vector")
+        direction = oracle / oracle_norm
 
     search_radius = math.sqrt(R * R + r * r)
     candidate_idx = np.asarray(tree.query_ball_point(z, search_radius), dtype=int)
