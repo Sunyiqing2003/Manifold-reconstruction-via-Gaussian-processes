@@ -10,6 +10,7 @@ on:
       - "experiments/plot_manifold_fitting_gp_tube.py"
       - "experiments/manifold_fitting_gp_mfcenter_demo.py"
       - "experiments/notes_gp_contraction_demo.py"
+      - "experiments/run_notes_gp_contraction_demo.py"
       - "benchmark/manifold_benchmark.py"
       - ".github/workflows/manifold-fitting-confidence-demo.yml"
   pull_request:
@@ -19,6 +20,7 @@ on:
       - "experiments/plot_manifold_fitting_gp_tube.py"
       - "experiments/manifold_fitting_gp_mfcenter_demo.py"
       - "experiments/notes_gp_contraction_demo.py"
+      - "experiments/run_notes_gp_contraction_demo.py"
       - "benchmark/manifold_benchmark.py"
       - ".github/workflows/manifold-fitting-confidence-demo.yml"
   workflow_dispatch:
@@ -88,7 +90,7 @@ jobs:
           --output results/manifold_fitting_gp_mfcenter_demo
       - name: Run notes-faithful ball-direction cylinder-GP replacement
         run: >-
-          python experiments/notes_gp_contraction_demo.py
+          python experiments/run_notes_gp_contraction_demo.py
           --n 3000
           --sigma 0.06
           --grid-size 72
