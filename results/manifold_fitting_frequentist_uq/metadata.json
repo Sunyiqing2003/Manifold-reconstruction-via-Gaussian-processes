@@ -1,0 +1,18 @@
+{
+  "n": 3000,
+  "sigma": 0.06,
+  "mc_reps": 100,
+  "bootstrap_resamples": 200,
+  "bootstrap_datasets_per_geometry": 2,
+  "truth_grid_size": 4800,
+  "levels": [
+    0.8,
+    0.9,
+    0.95,
+    0.99
+  ],
+  "center": "exact final smoothed output of benchmark.manifold_benchmark.manifold_fitting",
+  "gp_used": false,
+  "analytic_direction_limitation": "normal projected-component delta method; complete cylinder mean is piecewise constant conditional on membership",
+  "truth_use": "evaluation and labeled oracle-direction ablation only"
+}

@@ -34,6 +34,27 @@ class GP:
     noise_variance: float
 
 
+@dataclass
+class ManifoldFittingTrace:
+    """Intermediate arrays from the faithful ``manfit_ours`` port.
+
+    ``u_hat`` follows the paper convention ``(F_hat-z)/||F_hat-z||``.  The
+    implementation uses its negative when testing the symmetric cylinder, which
+    selects exactly the same observations.
+    """
+
+    ball_indices: list[np.ndarray]
+    F_hat: np.ndarray
+    v_hat: np.ndarray
+    u_hat: np.ndarray
+    direction_signal: np.ndarray
+    cylinder_indices: list[np.ndarray]
+    cylinder_average: np.ndarray
+    contracted: np.ndarray
+    smoothing_indices: list[np.ndarray]
+    final: np.ndarray
+
+
 @dataclass(frozen=True)
 class Manifold:
     name: str
@@ -209,12 +230,13 @@ def mrgap_round(
     }
 
 
-def manifold_fitting(
+def _manifold_fitting_core(
     sample: np.ndarray,
     sigma: float,
     bandwidth_multiplier: float = 1.0,
     average: bool = True,
-) -> tuple[np.ndarray, dict[str, float]]:
+    direction_override: np.ndarray | None = None,
+) -> tuple[np.ndarray, dict[str, float], ManifoldFittingTrace]:
     """Port of official MATLAB manfit_ours(sample,sig,sample_init,op_average).
 
     For a paired denoising comparison sample_init=sample. At sigma=0 the
@@ -223,36 +245,58 @@ def manifold_fitting(
     """
     n = len(sample)
     if sigma == 0:
+        singleton = [np.asarray([i], dtype=int) for i in range(n)]
+        trace = ManifoldFittingTrace(
+            singleton, sample.copy(), np.zeros_like(sample), np.zeros_like(sample),
+            np.zeros(n), singleton, sample.copy(), sample.copy(), singleton,
+            sample.copy(),
+        )
         return sample.copy(), {
             "median_local_neighborhood": 1.0, "min_local_neighborhood": 1,
             "mf_r": 0.0, "mf_R": 0.0, "sigma_zero_identity": 1,
-        }
+        }, trace
     r = bandwidth_multiplier * 5 * sigma / np.log10(n)
     R = bandwidth_multiplier * 10 * sigma * np.sqrt(np.log(1 / sigma)) / np.log10(n)
     tree = cKDTree(sample)
     nearest_five = tree.query(sample, k=min(5, n))[1]
     ball_neighbors = tree.query_ball_point(sample, 2 * r)
     output = np.empty_like(sample)
+    F_hat = np.empty_like(sample)
+    v_hat = np.empty_like(sample)
+    u_hat = np.empty_like(sample)
+    direction_signal = np.empty(n)
+    base_indices: list[np.ndarray] = []
+    cylinder_indices: list[np.ndarray] = []
     cylinder_counts = np.empty(n, dtype=int)
     search_radius = math.sqrt(R * R + r * r)
     candidates = tree.query_ball_point(sample, search_radius)
     for i, x in enumerate(sample):
         base_idx = np.union1d(ball_neighbors[i], np.atleast_1d(nearest_five[i]))
         xbar = sample[base_idx].mean(axis=0) + np.finfo(float).eps
-        direction = x - xbar
+        base_indices.append(np.asarray(base_idx, dtype=int))
+        F_hat[i] = xbar
+        v_hat[i] = xbar - x
+        direction = x - xbar if direction_override is None else np.asarray(direction_override[i])
         norm = np.linalg.norm(direction)
+        direction_signal[i] = np.linalg.norm(v_hat[i])
         if norm <= np.finfo(float).eps:
             output[i] = xbar
+            u_hat[i] = np.zeros(sample.shape[1])
             cylinder_counts[i] = 0
+            cylinder_indices.append(np.asarray(base_idx, dtype=int))
             continue
         direction /= norm
+        u_hat[i] = -direction if direction_override is None else direction
         centered = sample[candidates[i]] - x
         axial = centered @ direction
         radial_sq = np.sum(centered * centered, axis=1) - axial * axial
         mask = (np.abs(axial) < R) & (radial_sq < r * r)
         cylinder_idx = np.asarray(candidates[i], dtype=int)[mask]
+        cylinder_indices.append(cylinder_idx if len(cylinder_idx) > 10 else np.asarray(base_idx, dtype=int))
         cylinder_counts[i] = len(cylinder_idx)
         output[i] = sample[cylinder_idx].mean(axis=0) if len(cylinder_idx) > 10 else xbar
+    contracted = output.copy()
+    smoothing_indices: list[np.ndarray] = [np.asarray([i], dtype=int) for i in range(n)]
     if average:
         out_tree = cKDTree(output)
         knn = out_tree.query(output, k=min(5, n))[1]
@@ -260,13 +304,51 @@ def manifold_fitting(
         smoothed = np.empty_like(output)
         for i in range(n):
             idx = np.union1d(close[i], np.atleast_1d(knn[i]))
+            smoothing_indices[i] = np.asarray(idx, dtype=int)
             smoothed[i] = output[idx].mean(axis=0)
         output = smoothed
+    trace = ManifoldFittingTrace(
+        base_indices, F_hat, v_hat, u_hat, direction_signal,
+        cylinder_indices, contracted.copy(), contracted, smoothing_indices,
+        output.copy(),
+    )
     return output, {
         "median_local_neighborhood": float(np.median(cylinder_counts)),
         "min_local_neighborhood": int(np.min(cylinder_counts)),
         "mf_r": r, "mf_R": R, "sigma_zero_identity": 0,
-    }
+    }, trace
+
+
+def manifold_fitting(
+    sample: np.ndarray,
+    sigma: float,
+    bandwidth_multiplier: float = 1.0,
+    average: bool = True,
+) -> tuple[np.ndarray, dict[str, float]]:
+    """Port of official MATLAB ``manfit_ours`` with its original return API."""
+    output, diagnostics, _ = _manifold_fitting_core(
+        sample, sigma, bandwidth_multiplier, average
+    )
+    return output, diagnostics
+
+
+def manifold_fitting_with_trace(
+    sample: np.ndarray,
+    sigma: float,
+    bandwidth_multiplier: float = 1.0,
+    average: bool = True,
+    direction_override: np.ndarray | None = None,
+) -> tuple[np.ndarray, dict[str, float], ManifoldFittingTrace]:
+    """Run the same MF code path while returning local sets and smoothing maps.
+
+    ``direction_override`` exists solely for labeled simulation ablations.  When
+    omitted, this is bit-for-bit the estimator returned by :func:`manifold_fitting`.
+    """
+    if direction_override is not None and np.asarray(direction_override).shape != sample.shape:
+        raise ValueError("direction_override must have the same shape as sample")
+    return _manifold_fitting_core(
+        sample, sigma, bandwidth_multiplier, average, direction_override
+    )
 
 
 def error_to_reference(points: np.ndarray, reference_tree: cKDTree) -> float:

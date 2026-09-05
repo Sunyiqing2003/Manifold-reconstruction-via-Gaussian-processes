@@ -11,6 +11,7 @@ on:
       - "experiments/manifold_fitting_gp_mfcenter_demo.py"
       - "experiments/notes_gp_contraction_demo.py"
       - "experiments/benchmark_mf_gp_uq_vs_mrgap.py"
+      - "experiments/manifold_fitting_frequentist_uq.py"
       - "benchmark/manifold_benchmark.py"
       - ".github/workflows/manifold-fitting-confidence-demo.yml"
   pull_request:
@@ -21,6 +22,7 @@ on:
       - "experiments/manifold_fitting_gp_mfcenter_demo.py"
       - "experiments/notes_gp_contraction_demo.py"
       - "experiments/benchmark_mf_gp_uq_vs_mrgap.py"
+      - "experiments/manifold_fitting_frequentist_uq.py"
       - "benchmark/manifold_benchmark.py"
       - ".github/workflows/manifold-fitting-confidence-demo.yml"
   workflow_dispatch:
@@ -111,6 +113,16 @@ jobs:
           --truth-size 4800
           --ablation-reps 20
           --output results/benchmark_mf_gp_uq_vs_mrgap
+      - name: Run exact-MF frequentist UQ diagnostic
+        run: >-
+          python experiments/manifold_fitting_frequentist_uq.py
+          --n 3000
+          --sigma 0.06
+          --mc-reps 20
+          --bootstrap 40
+          --bootstrap-datasets 1
+          --truth-size 4800
+          --output results/manifold_fitting_frequentist_uq
       - name: Upload demo results
         uses: actions/upload-artifact@v4
         with:
@@ -124,4 +136,5 @@ jobs:
             results/manifold_fitting_gp_mfcenter_demo/
             results/notes_gp_contraction_demo/
             results/benchmark_mf_gp_uq_vs_mrgap/
+            results/manifold_fitting_frequentist_uq/
           if-no-files-found: error
