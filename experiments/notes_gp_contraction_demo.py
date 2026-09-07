@@ -27,6 +27,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from scipy.interpolate import CubicSpline
 from scipy.linalg import cho_factor, cho_solve
+from scipy.optimize import minimize
 from scipy.spatial import cKDTree
 from scipy.stats import norm
 
@@ -61,6 +62,17 @@ class LocalFit:
     cylinder_fallback: bool
 
 
+@dataclass(frozen=True)
+class LocalGeometry:
+    z: np.ndarray
+    q: np.ndarray
+    s: np.ndarray
+    direction: np.ndarray
+    direction_signal: float
+    ball_fallback: bool
+    cylinder_fallback: bool
+
+
 def write_csv(path: Path, rows: list[dict[str, object]]) -> None:
     if not rows:
         return
@@ -80,7 +92,9 @@ def radial_scaffold(
     radii = np.linalg.norm(relative, axis=1)
     delta = angle_diff(angles[None, :] - phi[:, None])
     weights = np.exp(-0.5 * (delta / angle_bandwidth) ** 2)
-    radius = (weights @ radii) / np.maximum(weights.sum(axis=1), 1e-14)
+    radius = np.sum(weights * radii[None, :], axis=1) / np.maximum(
+        weights.sum(axis=1), 1e-14
+    )
     radial_direction = np.column_stack((np.cos(phi), np.sin(phi)))
     scaffold = center + radius[:, None] * radial_direction
     # This frame is used only to create the controlled query offset.  It is never
@@ -140,7 +154,91 @@ def local_gp(
     return prediction, math.sqrt(posterior_variance), math.sqrt(frequentist_variance)
 
 
-def fit_query(
+def paper_gp(
+    q: np.ndarray,
+    s: np.ndarray,
+    amplitude: float,
+    rho: float,
+    noise_sd: float,
+) -> tuple[float, float, float]:
+    """Dunson--Wu zero-mean GP prediction at zero for a scalar response."""
+    diff = q[:, None, :] - q[None, :, :]
+    distance_sq = np.sum(diff * diff, axis=2)
+    kernel = amplitude * np.exp(-distance_sq / rho)
+    covariance = kernel + noise_sd**2 * np.eye(len(q))
+    jitter = 1e-10 * max(1.0, amplitude, noise_sd**2)
+    factor = cho_factor(covariance + jitter * np.eye(len(q)), check_finite=False)
+    k0 = amplitude * np.exp(-np.sum(q * q, axis=1) / rho)
+    weights = cho_solve(factor, k0, check_finite=False)
+    prediction = float(weights @ s)
+    posterior_variance = max(amplitude - float(k0 @ weights), 0.0)
+    frequentist_variance = noise_sd**2 * float(weights @ weights)
+    return prediction, math.sqrt(posterior_variance), math.sqrt(frequentist_variance)
+
+
+def estimate_paper_hyperparameters(
+    geometries: list[LocalGeometry], sigma: float, r: float
+) -> tuple[float, float, float, dict[str, object]]:
+    """Maximize the pooled local marginal likelihood in Algorithm 1, step 3.
+
+    Compact, scale-relative bounds prevent the small local regressions from
+    escaping to numerically meaningless boundary values. They are declared in
+    advance and reported with the results.
+    """
+    sigma2 = sigma**2
+    rho0 = 2.0 * r**2
+    bounds = [
+        (math.log(1e-3 * sigma2), math.log(100.0 * sigma2)),
+        (math.log(0.01 * rho0), math.log(100.0 * rho0)),
+        (math.log(0.1 * sigma), math.log(3.0 * sigma)),
+    ]
+
+    distances = []
+    responses = []
+    for geometry in geometries:
+        diff = geometry.q[:, None, :] - geometry.q[None, :, :]
+        distances.append(np.sum(diff * diff, axis=2))
+        responses.append(geometry.s)
+
+    def objective(log_parameters: np.ndarray) -> float:
+        amplitude, rho, noise_sd = np.exp(log_parameters)
+        total = 0.0
+        for distance_sq, response in zip(distances, responses):
+            covariance = amplitude * np.exp(-distance_sq / rho)
+            covariance.flat[:: len(response) + 1] += noise_sd**2
+            jitter = 1e-10 * max(1.0, amplitude, noise_sd**2)
+            try:
+                factor = cho_factor(
+                    covariance + jitter * np.eye(len(response)), check_finite=False
+                )
+            except np.linalg.LinAlgError:
+                return 1e100
+            solved = cho_solve(factor, response, check_finite=False)
+            logdet = 2.0 * float(np.sum(np.log(np.diag(factor[0]))))
+            total += 0.5 * (float(response @ solved) + logdet)
+        return total
+
+    initial = np.log([sigma2, rho0, sigma])
+    result = minimize(objective, initial, method="L-BFGS-B", bounds=bounds)
+    amplitude, rho, noise_sd = np.exp(result.x)
+    diagnostics = {
+        "eb_success": bool(result.success),
+        "eb_status": int(result.status),
+        "eb_iterations": int(result.nit),
+        "eb_objective": float(result.fun),
+        "eb_message": str(result.message),
+        "eb_at_bound": bool(
+            any(
+                abs(float(value) - lower) < 1e-5
+                or abs(float(value) - upper) < 1e-5
+                for value, (lower, upper) in zip(result.x, bounds)
+            )
+        ),
+    }
+    return float(amplitude), float(rho), float(noise_sd), diagnostics
+
+
+def prepare_query(
     sample: np.ndarray,
     tree: cKDTree,
     z: np.ndarray,
@@ -149,12 +247,10 @@ def fit_query(
     r0: float,
     r: float,
     R: float,
-    amplitude: float,
-    length_scale: float,
     min_ball: int,
     min_cylinder: int,
     direction_override: np.ndarray | None = None,
-) -> LocalFit:
+) -> LocalGeometry:
     ball_idx = np.asarray(tree.query_ball_point(z, r0), dtype=int)
     ball_fallback = len(ball_idx) < min_ball
     if ball_fallback:
@@ -197,20 +293,85 @@ def fit_query(
     centered = sample[cylinder_idx] - z
     s = centered @ direction
     q = centered - s[:, None] * direction
-    gp_mean, posterior_sd, frequentist_sd = local_gp(
-        q, s, sigma, amplitude, length_scale
-    )
-    average_mean = float(np.mean(s))
-    return LocalFit(
-        average_point=z + direction * average_mean,
-        gp_point=z + direction * gp_mean,
+    return LocalGeometry(
+        z=z,
+        q=q,
+        s=s,
         direction=direction,
         direction_signal=direction_signal,
-        posterior_sd=posterior_sd,
-        frequentist_sd=frequentist_sd,
-        cylinder_size=len(cylinder_idx),
         ball_fallback=ball_fallback,
         cylinder_fallback=cylinder_fallback,
+    )
+
+
+def fit_geometry(
+    geometry: LocalGeometry,
+    *,
+    gp_method: str,
+    sigma: float,
+    amplitude: float,
+    length_scale: float,
+    rho: float,
+    noise_sd: float,
+) -> LocalFit:
+    if gp_method == "paper-eb":
+        gp_mean, posterior_sd, frequentist_sd = paper_gp(
+            geometry.q, geometry.s, amplitude, rho, noise_sd
+        )
+    else:
+        gp_mean, posterior_sd, frequentist_sd = local_gp(
+            geometry.q, geometry.s, sigma, amplitude, length_scale
+        )
+    average_mean = float(np.mean(geometry.s))
+    return LocalFit(
+        average_point=geometry.z + geometry.direction * average_mean,
+        gp_point=geometry.z + geometry.direction * gp_mean,
+        direction=geometry.direction,
+        direction_signal=geometry.direction_signal,
+        posterior_sd=posterior_sd,
+        frequentist_sd=frequentist_sd,
+        cylinder_size=len(geometry.s),
+        ball_fallback=geometry.ball_fallback,
+        cylinder_fallback=geometry.cylinder_fallback,
+    )
+
+
+def fit_query(
+    sample: np.ndarray,
+    tree: cKDTree,
+    z: np.ndarray,
+    *,
+    sigma: float,
+    r0: float,
+    r: float,
+    R: float,
+    amplitude: float,
+    length_scale: float,
+    min_ball: int,
+    min_cylinder: int,
+    direction_override: np.ndarray | None = None,
+) -> LocalFit:
+    """Backward-compatible entry point for the frozen universal-kriging fit."""
+    geometry = prepare_query(
+        sample,
+        tree,
+        z,
+        sigma=sigma,
+        r0=r0,
+        r=r,
+        R=R,
+        min_ball=min_ball,
+        min_cylinder=min_cylinder,
+        direction_override=direction_override,
+    )
+    return fit_geometry(
+        geometry,
+        gp_method="universal-fixed",
+        sigma=sigma,
+        amplitude=amplitude,
+        length_scale=length_scale,
+        rho=2.0 * length_scale**2,
+        noise_sd=sigma,
     )
 
 
@@ -266,8 +427,8 @@ def run_case(
     amplitude = args.amplitude_factor * args.sigma**2
     length_scale = args.c_ell * r
     tree = cKDTree(contraction_sample)
-    fits = [
-        fit_query(
+    geometries = [
+        prepare_query(
             contraction_sample,
             tree,
             z,
@@ -275,12 +436,36 @@ def run_case(
             r0=r0,
             r=r,
             R=R,
-            amplitude=amplitude,
-            length_scale=length_scale,
             min_ball=args.min_ball,
             min_cylinder=args.min_cylinder,
         )
         for z in query
+    ]
+    rho = 2.0 * length_scale**2
+    noise_sd = args.sigma
+    eb_diagnostics: dict[str, object] = {
+        "eb_success": True,
+        "eb_status": 0,
+        "eb_iterations": 0,
+        "eb_objective": float("nan"),
+        "eb_message": "fixed hyperparameters",
+        "eb_at_bound": False,
+    }
+    if args.gp_method == "paper-eb":
+        amplitude, rho, noise_sd, eb_diagnostics = estimate_paper_hyperparameters(
+            geometries, args.sigma, r
+        )
+    fits = [
+        fit_geometry(
+            geometry,
+            gp_method=args.gp_method,
+            sigma=args.sigma,
+            amplitude=amplitude,
+            length_scale=length_scale,
+            rho=rho,
+            noise_sd=noise_sd,
+        )
+        for geometry in geometries
     ]
     average = np.vstack([fit.average_point for fit in fits])
     gp = np.vstack([fit.gp_point for fit in fits])
@@ -316,6 +501,12 @@ def run_case(
         "n_scaffold": len(scaffold_sample),
         "n_contraction": len(contraction_sample),
         "sigma": args.sigma,
+        "gp_method": args.gp_method,
+        "gp_amplitude": amplitude,
+        "gp_rho": rho,
+        "gp_length_scale_equivalent": math.sqrt(rho / 2.0),
+        "gp_noise_sd": noise_sd,
+        **eb_diagnostics,
         "scaffold_hausdorff": scaffold_hausdorff,
         "average_hausdorff": avg_hausdorff,
         "gp_hausdorff": gp_hausdorff,
@@ -390,6 +581,11 @@ def summarize(rows: list[dict[str, object]]) -> list[dict[str, object]]:
             "mean_ball_fallback_fraction": float(np.mean(value("ball_fallback_fraction"))),
             "mean_cylinder_fallback_fraction": float(np.mean(value("cylinder_fallback_fraction"))),
             "mean_high_curvature_gp_improvement": float(np.mean(value("high_curvature_gp_improvement"))),
+            "mean_gp_amplitude": float(np.mean(value("gp_amplitude"))),
+            "mean_gp_rho": float(np.mean(value("gp_rho"))),
+            "mean_gp_noise_sd": float(np.mean(value("gp_noise_sd"))),
+            "eb_success_fraction": float(np.mean(value("eb_success"))),
+            "eb_at_bound_fraction": float(np.mean(value("eb_at_bound"))),
         })
     return summary
 
@@ -462,20 +658,44 @@ def plot_curvature(path: Path, records: list[dict[str, np.ndarray]]) -> None:
 def write_report(path: Path, summary: list[dict[str, object]], args: argparse.Namespace) -> None:
     by_name = {str(row["manifold"]): row for row in summary}
     lines = [
-        "# Notes-faithful GP contraction diagnostic",
+        "# GP contraction diagnostic",
         "",
         "This experiment compares the original cylinder average with a scalar GP",
         "prediction at projected coordinate `q=0`. Both estimators use the same",
         "Yao ball-step direction and exactly the same cylinder observations. The",
         "independent first split supplies only the closed query scaffold.",
         "",
+        ("The GP regression uses the Dunson--Wu zero-mean covariance and pooled "
+         "empirical-Bayes rule." if args.gp_method == "paper-eb" else
+         "The GP regression uses the original frozen universal-kriging rule."),
+        "",
         "## Frozen setup",
         "",
         f"- `n={args.n}`, `sigma={args.sigma}`, `{args.mc_reps}` Monte Carlo replicates per manifold;",
         f"- query offset `c_offset*sigma={args.c_offset}*sigma`;",
-        f"- GP amplitude `A={args.amplitude_factor}*sigma^2`, length scale `ell={args.c_ell}*r`;",
-        "- constant unknown GP mean handled by universal kriging;",
+        ("- pooled empirical Bayes estimates `A`, `rho`, and the working noise SD "
+         "from all 60 local regressions in each replicate;" if args.gp_method == "paper-eb" else
+         f"- GP amplitude `A={args.amplitude_factor}*sigma^2`, length scale `ell={args.c_ell}*r`;"),
+        ("- zero GP prior mean and kernel `A exp(-||q-q'||^2/rho)`;" if args.gp_method == "paper-eb" else
+         "- constant unknown GP mean handled by universal kriging;"),
         "- finite-grid Bonferroni multiplier for UQ visualization.",
+        "",
+        ("This transfers the GP regression rule in [Dunson--Wu, "
+         "arXiv:2110.07478v4](https://arxiv.org/html/2110.07478v4) into the "
+         "Yao-cylinder coordinates. It is not the complete MrGap "
+         "tangent-chart algorithm." if args.gp_method == "paper-eb" else
+         "This is the frozen mechanism-test baseline."),
+        *(
+            [
+                "",
+                "The log-scale optimizer uses the predeclared bounds "
+                "`A in [1e-3 sigma^2, 100 sigma^2]`, "
+                "`rho in [0.01(2r^2), 100(2r^2)]`, and "
+                "`tau in [0.1 sigma, 3 sigma]`.",
+            ]
+            if args.gp_method == "paper-eb"
+            else []
+        ),
         "",
         "## Point-estimation results",
         "",
@@ -490,28 +710,49 @@ def write_report(path: Path, summary: list[dict[str, object]], args: argparse.Na
         )
     circle = by_name["circle"]
     ellipse = by_name["ellipse"]
+    gp_improves_both = all(
+        float(by_name[name]["mean_gp_hausdorff"])
+        < float(by_name[name]["mean_average_hausdorff"])
+        for name in CURVES
+    )
     lines += [
         "",
-        "With these frozen hyperparameters, the GP does not improve the primary",
-        "Hausdorff criterion on average. It beats the shared-cylinder average in",
+        (
+            "Under this predeclared fitting rule, the GP improves mean Hausdorff "
+            "error on both geometries. It beats the shared-cylinder average in"
+            if gp_improves_both
+            else "Under this fitting rule, the GP does not improve mean Hausdorff "
+            "error on both geometries. It beats the shared-cylinder average in"
+        ),
         f"{float(circle['fraction_gp_better']):.0%} of circle replicates and",
         f"{float(ellipse['fraction_gp_better']):.0%} of ellipse replicates. The",
         "ellipse top-curvature quartile has only a small positive mean local-error",
         f"difference ({float(ellipse['mean_high_curvature_gp_improvement']):.5f})",
-        "in favor of GP. This is weak local evidence and does not overturn the",
-        "whole-curve Hausdorff comparison.",
+        "in favor of GP. With only 20 replicates, these are mechanism-test results",
+        "rather than a final comparison.",
+        "",
+        "## Fitted covariance parameters",
+        "",
+        "| manifold | mean A | mean rho | mean working noise SD | optimizer success | fit at a bound |",
+        "|---|---:|---:|---:|---:|---:|",
     ]
+    for manifold in CURVES:
+        row = by_name[manifold]
+        lines.append(
+            f"| {manifold} | {float(row['mean_gp_amplitude']):.6g} | {float(row['mean_gp_rho']):.6g} | "
+            f"{float(row['mean_gp_noise_sd']):.6g} | {float(row['eb_success_fraction']):.2f} | "
+            f"{float(row['eb_at_bound_fraction']):.2f} |"
+        )
     lines += [
         "",
         "The comparison estimates the empirical difference between",
         "`E[s | Y in V_z]` and a GP estimate of `E[s | q=0]`. The ellipse curvature",
         "figure is post-hoc: curvature never enters either estimator.",
         "",
-        "For a local quadratic graph, the motivating heuristic is that cylinder",
-        "averaging contains both an EIV term and a transverse-window term, whereas",
-        "the GP target at `q=0` may remove the extra transverse-window contribution.",
-        "The remaining population bias can still be of order `kappa*sigma^2/2`;",
-        "the experiment does not subtract it and does not claim that GP eliminates bias.",
+        "For a local quadratic graph, cylinder averaging and axis prediction target",
+        "different conditional functionals. Their gap includes transverse-window,",
+        "noisy-coordinate, selection, and direction-estimation effects. This",
+        "experiment does not identify any one of these as the cause of the gap.",
         "",
         "## Conditional UQ diagnostics",
         "",
@@ -528,7 +769,7 @@ def write_report(path: Path, summary: list[dict[str, object]], args: argparse.Na
     lines += [
         "",
         "These are finite-grid conditional GP simultaneous bands. The posterior SD",
-        "and `sigma*||a_z||` quantify different uncertainties and are reported",
+        "and `tau*||a_z||` quantify different uncertainties and are reported",
         "separately. Empirical inclusion here is a simulation diagnostic, not an",
         "honest true-manifold confidence theorem. A maximum half-width below",
         "`1.96*sigma` also does not imply geometric containment; containment is",
@@ -564,6 +805,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--c-offset", type=float, default=1.0)
     parser.add_argument("--c-ell", type=float, default=1.0)
     parser.add_argument("--amplitude-factor", type=float, default=1.0)
+    parser.add_argument(
+        "--gp-method", choices=("universal-fixed", "paper-eb"), default="universal-fixed"
+    )
     parser.add_argument("--bandwidth-multiplier", type=float, default=1.0)
     parser.add_argument("--scaffold-angle-bandwidth", type=float, default=0.16)
     parser.add_argument("--min-ball", type=int, default=5)
@@ -608,6 +852,7 @@ def main() -> None:
     plot_curvature(args.output / "ellipse_curvature_diagnostic.png", ellipse_details)
     metadata = {
         "algorithm": "Yao ball direction + shared cylinder average/GP(q=0)",
+        "gp_method": args.gp_method,
         "truth_used_by_estimator": False,
         "sample_splitting": "half scaffold, half contraction",
         "query_offset_c_sigma": args.c_offset,
@@ -616,9 +861,35 @@ def main() -> None:
         "mc_reps": args.mc_reps,
         "grid_size": args.grid_size,
         "dense_grid_size": args.dense_grid_size,
-        "amplitude": f"{args.amplitude_factor} * sigma^2",
-        "length_scale": f"{args.c_ell} * r",
-        "gp_mean": "unknown constant estimated by universal kriging",
+        "amplitude": (
+            "estimated by pooled local marginal likelihood"
+            if args.gp_method == "paper-eb"
+            else f"{args.amplitude_factor} * sigma^2"
+        ),
+        "kernel_range": (
+            "rho estimated by pooled local marginal likelihood"
+            if args.gp_method == "paper-eb"
+            else f"ell = {args.c_ell} * r"
+        ),
+        "gp_mean": (
+            "zero, following Dunson--Wu equation (5)-(6)"
+            if args.gp_method == "paper-eb"
+            else "unknown constant estimated by universal kriging"
+        ),
+        "gp_hyperparameter_rule": (
+            "pooled local marginal likelihood within each replicate"
+            if args.gp_method == "paper-eb"
+            else "fixed scale matching"
+        ),
+        "paper_eb_bounds": (
+            {
+                "amplitude": "[1e-3 sigma^2, 100 sigma^2]",
+                "rho": "[0.01 (2 r^2), 100 (2 r^2)]",
+                "working_noise_sd": "[0.1 sigma, 3 sigma]",
+            }
+            if args.gp_method == "paper-eb"
+            else None
+        ),
         "bandwidth_formula": {"r0": "2r", "r": "5 sigma/log10(n_contraction)", "R": "10 sigma sqrt(log(1/sigma))/log10(n_contraction)"},
         "circle_eiv_bias_reference": args.sigma**2 / 2.0,
         "uq_label": "finite-grid conditional GP simultaneous band",

@@ -17,10 +17,11 @@ the Manifold Fitting contraction direction, constructs the corresponding Yao
 cylinder, regresses axial displacement on transverse displacement, and evaluates
 the regression at the cylinder axis.
 
-The current experiments give two distinct conclusions.
+The revised experiments give two distinct conclusions.
 
-1. GP prediction at the cylinder axis does not systematically improve
-   reconstruction over averaging the same cylinder observations.
+1. The earlier fixed universal-kriging specification did not improve point
+   estimation, but the Dunson--Wu zero-mean GP with pooled empirical-Bayes
+   covariance estimation does improve the matched-cylinder result.
 2. GP-derived uncertainty is empirically more promising than the narrow MrGap
    posterior uncertainty, but its coverage is geometry dependent and is not yet
    a frequentist confidence guarantee.
@@ -75,7 +76,7 @@ The GP input is the projected ambient vector $q_i\in\widehat u_z^\perp$.
 The GP output is the scalar axial coordinate $s_i$. The method does not replace
 $\widehat u_z$ by a complete tangent or normal basis.
 
-### 2.2 Local GP and contraction point
+### 2.2 Why the first implementation used universal kriging
 
 The working local model is
 
@@ -84,7 +85,7 @@ s_i=f_z(q_i)+e_i,\qquad
 f_z\sim\operatorname{GP}(m_z,k_z).
 $$
 
-The implemented squared-exponential covariance is
+The first implementation used the squared-exponential covariance
 
 $$
 k_z(q_i,q_j)
@@ -93,14 +94,14 @@ k_z(q_i,q_j)
 \right).
 $$
 
-With covariance matrix
+The baseline covariance matrix was
 
 $$
 K_z(i,j)=k_z(q_i,q_j)+\sigma^2\mathbf 1\{i=j\},
 $$
 
-the GP is evaluated at $q=0$. The unknown constant mean is handled by universal
-kriging. If $\mathbf 1$ is the vector of ones and
+with fixed $A=\sigma^2$ and $\ell=r$. It handled an unknown local intercept by
+universal kriging. If $\mathbf 1$ is the vector of ones and
 
 $$
 k_0(i)=k_z(q_i,0),
@@ -116,7 +117,7 @@ a_z
  \left(1-\mathbf 1^\top K_z^{-1}k_0\right).
 $$
 
-Thus
+Thus the baseline contraction was
 
 $$
 \widehat\mu_z(0)=a_z^\top s,
@@ -132,11 +133,80 @@ $$
 =\{\widehat G_{\rm GP}(z):z\in\Gamma\}.
 $$
 
+This was a deliberate mechanism test: an offset query generally has a nonzero
+axial displacement, so reproducing constants avoids pulling the estimate toward
+zero solely because of the prior mean. Fixing the covariance scales also kept
+the first comparison focused on replacing cylinder averaging by evaluation at
+$q=0$. These choices are reasonable for that diagnostic, but they are not the
+GP fitting rule in Dunson and Wu.
+
+### 2.3 Dunson--Wu GP rule used in the revised experiment
+
+Dunson and Wu formulate each local manifold patch after a local PCA rotation.
+Their predictor is the $d$-dimensional tangent coordinate and their response is
+the $(D-d)$-dimensional normal coordinate. They put independent zero-mean GPs
+on the normal components with shared covariance
+
+$$
+C(w,w')=A\exp\left(-\frac{\|w-w'\|^2}{\rho}\right),
+$$
+
+and estimate $A$, $\rho$, and the working noise standard deviation $\tau$ by
+maximizing the sum of the local log marginal likelihoods. Prediction at zero is
+
+$$
+\widehat f_z(0)
+=c_{0,z}^\top(C_z+\tau^2I)^{-1}s_z,
+$$
+
+where $C_z$ is the kernel matrix and $c_{0,z}$ is its covariance vector with
+the origin.
+
+The revised experiment transfers this **GP regression rule** into the existing
+Yao-cylinder geometry: $q_i$ and $s_i$ remain the transverse and axial
+coordinates defined in Section 2.1, while the mean, kernel parameterization,
+and pooled empirical-Bayes fit follow Dunson--Wu. This is a hybrid contraction
+experiment, not the complete MrGap algorithm. Complete MrGap also replaces the
+Yao direction and cylinder with a local PCA tangent chart, fits all normal
+components, iterates denoising, and interpolates local patches.
+
+For each Monte Carlo replicate, the revised fit jointly minimizes
+
+$$
+\frac12\sum_{z\in\Gamma}
+\left[
+s_z^\top(C_z+\tau^2I)^{-1}s_z
++\log\det(C_z+\tau^2I)
+\right]
+$$
+
+over log-transformed parameters. The following scale-relative bounds are fixed
+before looking at reconstruction error:
+
+$$
+10^{-3}\sigma^2\leq A\leq100\sigma^2,
+\qquad
+0.01(2r^2)\leq\rho\leq100(2r^2),
+\qquad
+0.1\sigma\leq\tau\leq3\sigma.
+$$
+
+All 60 local regressions in a replicate share the fitted triplet. This matches
+the pooling step in the paper and avoids unstable separate optimization in
+cylinders containing only about 40--50 observations.
+
+The equations and pooling rule above follow Sections 2.3 and 2.5 of the current
+[Dunson--Wu arXiv manuscript](https://arxiv.org/html/2110.07478v4). The journal
+version is listed by [Biometrika](https://academic.oup.com/biomet/article-abstract/113/2/asag011/8490661)
+as published in 2026; the arXiv project began in 2021. “The 2023 method” in the
+project discussion refers to the earlier algorithm/code lineage rather than the
+journal publication year.
+
 The experiment uses a one-dimensional query scaffold because a contraction map
 applied to an arbitrary full-dimensional query domain is not automatically a
 one-dimensional embedded manifold.
 
-### 2.3 Why evaluate at $q=0$?
+### 2.4 Why evaluate at $q=0$?
 
 The matched cylinder average uses
 
@@ -293,6 +363,19 @@ nugget, the query offset, or the Yao bandwidth multiplier. Consequently, the
 results describe this frozen GP specification and do not establish optimality
 or robustness of the covariance parameters.
 
+The revised `paper-eb` mode uses a zero prior mean, writes the kernel as
+$A\exp(-\|q-q'\|^2/\rho)$, and estimates $(A,\rho,\tau)$ once per replicate by
+the pooled local marginal likelihood in Section 2.3. The known simulation
+$\sigma$ initializes the optimizer and defines its predeclared bounds; it is not
+inserted as the fitted nugget. Mean fitted values over 20 replicates were
+
+| Geometry | $A$ | $\rho$ | $\tau$ |
+|---|---:|---:|---:|
+| Circle | 0.004933 | 0.277856 | 0.061497 |
+| Ellipse | 0.005715 | 0.229121 | 0.062011 |
+
+All 40 optimizations reported success and none ended on a parameter bound.
+
 There is therefore no additional GP bandwidth called $h$ in the current
 notes-faithful algorithm. The quantities that can otherwise be conflated as
 “bandwidth” are:
@@ -318,8 +401,15 @@ $$
 +\frac{
  \left(1-\mathbf 1^\top K_z^{-1}k_0\right)^2
 }{
- \mathbf 1^\top K_z^{-1}\mathbf 1
+\mathbf 1^\top K_z^{-1}\mathbf 1
 }.
+$$
+
+For the revised zero-mean GP it is instead
+
+$$
+\widehat v_{{\rm post},z}(0)
+=A-c_{0,z}^\top(C_z+\tau^2I)^{-1}c_{0,z}.
 $$
 
 The reported conditional posterior SD is
@@ -334,8 +424,10 @@ variance of the same GP mean, holding the design and weights fixed, is
 
 $$
 \widehat v_{F,z}(0)
-=\sigma^2\|a_z\|^2.
+=\tau^2\|a_z\|^2,
 $$
+
+where $\tau=\sigma$ in the fixed baseline and is estimated in `paper-eb`.
 
 These are different uncertainty quantities. The first is conditional GP
 posterior uncertainty under the covariance model. The second is repeated-noise
@@ -389,9 +481,10 @@ $$
 This limitation prevents interpreting the comparison as a fully optimized
 MrGap evaluation.
 
-### 3.6 Parameter adjustment in future experiments
+### 3.6 Parameter adjustment and remaining sensitivity work
 
-The present numbers should remain the frozen baseline. A future parameter study
+The fixed universal-kriging numbers remain the frozen baseline. The pooled
+empirical-Bayes comparison is now the first data-driven GP fit. A broader study
 should separate geometric localization from GP covariance estimation rather
 than adjust all constants against reconstruction error at once.
 
@@ -438,11 +531,12 @@ $$
 c_A=c_\ell=c_\tau=1.
 $$
 
-Possible data-driven choices include pooled local marginal likelihood across
-query points, held-out conditional predictive likelihood within cylinders, or
-a predeclared empirical-Bayes rule. Any such procedure must be fitted using
-observed data only, frozen before coverage evaluation, and repeated inside the
-sampling analysis because estimated covariance parameters add uncertainty.
+The implemented data-driven choice is pooled local marginal likelihood across
+query points with predeclared bounds. A further alternative is held-out
+conditional predictive likelihood within cylinders. Any procedure must be
+fitted using observed data only, frozen before coverage evaluation, and repeated
+inside the sampling analysis because estimated covariance parameters add
+uncertainty.
 Local unconstrained maximum likelihood may be weakly identified when cylinders
 contain only 40–50 points, so a practical rule would need compact parameter
 ranges or partial pooling across nearby queries.
@@ -452,11 +546,11 @@ The following order would keep interpretation clear:
 1. retain the current frozen specification as the reference;
 2. vary geometric constants while keeping GP ratios fixed;
 3. freeze the resulting observable-data rule;
-4. compare fixed GP ratios with a predeclared likelihood-based rule;
-5. rerun coverage evaluation only after all selection rules are frozen.
+4. compare the fixed ratios with the implemented pooled likelihood rule;
+5. expand the coverage experiment after all geometric rules are frozen.
 
-This is a proposed adjustment protocol, not a tuning experiment already
-completed. The theory must ultimately state admissible sequences for $r_0$,
+Only the covariance-fitting comparison has been completed. The theory must
+ultimately state admissible sequences for $r_0$,
 $r$, $R$, $A$, $\ell$, and $\tau^2$ rather than rely only on a finite-sample
 selection procedure.
 
@@ -468,26 +562,33 @@ This is the cleanest test of replacing the cylinder average by prediction at
 $q=0$. Both methods use the same estimated direction, cylinder, and cylinder
 observations.
 
-| Geometry | Mean $H_{\rm avg}$ | Mean $H_{\rm GP}$ | GP better fraction |
-|---|---:|---:|---:|
-| Circle | 0.02652 | 0.03032 | 0.30 |
-| Ellipse | 0.03027 | 0.03172 | 0.35 |
+| Geometry | GP rule | Mean $H_{\rm avg}$ | Mean $H_{\rm GP}$ | GP better fraction |
+|---|---|---:|---:|---:|
+| Circle | fixed universal kriging | 0.02652 | 0.03032 | 0.30 |
+| Circle | Dunson--Wu zero mean + pooled EB | 0.02652 | 0.02473 | 0.80 |
+| Ellipse | fixed universal kriging | 0.03027 | 0.03172 | 0.35 |
+| Ellipse | Dunson--Wu zero mean + pooled EB | 0.03027 | 0.02829 | 0.90 |
 
-The ellipse's top-curvature quartile has a mean local GP improvement of about
-0.00083. This is weak local evidence for the transverse-window motivation, but
-the effect is too small to improve whole-curve Hausdorff error in the current
-narrow-cylinder regime.
+The same seeds, scaffold, directions, and cylinder observations are used for
+both GP rules. The result therefore isolates the mean/covariance fitting change.
+The revised GP reduces mean Hausdorff error by 0.00178 on the circle and 0.00198
+on the ellipse relative to cylinder averaging. In the ellipse's top-curvature
+quartile, mean local improvement changes from 0.00083 to 0.00103. Twenty
+replicates motivate the change but do not settle a final method comparison.
 
 The corresponding finite-grid conditional uncertainty results are:
 
-| Geometry | Posterior coverage | Frequentist same-GP-mean coverage | Mean $s_{\rm post}/s_F$ |
-|---|---:|---:|---:|
-| Circle | 0.95 | 0.95 | 1.113 |
-| Ellipse | 0.95 | 0.85 | 1.119 |
+| Geometry | GP rule | Posterior coverage | Frequentist same-GP-mean coverage | Mean $s_{\rm post}/s_F$ |
+|---|---|---:|---:|---:|
+| Circle | fixed universal kriging | 0.95 | 0.95 | 1.113 |
+| Circle | Dunson--Wu zero mean + pooled EB | 0.95 | 0.95 | 1.020 |
+| Ellipse | fixed universal kriging | 0.95 | 0.85 | 1.119 |
+| Ellipse | Dunson--Wu zero mean + pooled EB | 0.85 | 0.85 | 1.024 |
 
-The posterior and frequentist GP-mean SDs are numerically close but not equal.
-The coverage values are based on 20 Monte Carlo replicates and should be read as
-diagnostics.
+The estimated-rule posterior and same-GP-mean SDs are closer numerically, but
+ellipse posterior coverage falls from 0.95 to 0.85. Covariance fitting improved
+point estimation without resolving conditional-band calibration. The coverage
+values are based on 20 Monte Carlo replicates and remain diagnostics.
 
 ### 4.2 Paper-facing point estimation
 
@@ -719,10 +820,10 @@ $$
 f_{\lambda,z}(0)-m_z(0).
 $$
 
-The result must state how $A$, $\ell$, the noise variance, local sample size,
-and the cylinder scales may depend on $n$ and $\sigma$. The current choices
-$A=\sigma^2$ and $\ell=r$ are experimental scale rules, not theoretical
-sequences derived from an optimality result.
+The result must state how $A$, $\rho$, the noise variance, local sample size,
+and the cylinder scales may depend on $n$ and $\sigma$. Both the fixed rule and
+the bounded pooled empirical-Bayes rule are experimental procedures, not
+theoretical sequences derived from an optimality result.
 
 ### T5. Variance calibration
 
@@ -734,9 +835,9 @@ $$
 
 upper-bounds, approximates, or must be rescaled relative to the frequentist
 sampling distribution of $\widehat\mu_z(0)$. This requires accounting for
-estimated mean, random design, covariance-parameter choice, and local
-selection. The empirical ratio near 1.11 in the matched-cylinder experiment is
-evidence for one frozen regime, not a general calibration result.
+random design, covariance-parameter estimation, and local selection. The mean
+empirical ratios are about 1.11 for the fixed rule and 1.02 for the pooled-EB
+rule, but neither is a general calibration result.
 
 ### T6. Simultaneous control over the query scaffold
 
@@ -797,13 +898,14 @@ simulations.
    stated limiting regime or depends materially on selection and latent density.
 4. Extend the calculation to a general local quadratic graph and identify all
    terms of the same order as $\sigma^2\kappa$.
-5. Treat $A$, $\ell$, and the nugget as theoretical sequences and determine
-   conditions for uniform GP-mean control; only then decide whether estimation
-   by marginal likelihood is compatible with the proof.
+5. Treat $A$, $\rho$, and the nugget as theoretical sequences and determine
+   conditions under which pooled marginal-likelihood estimation preserves
+   uniform GP-mean control.
 6. Use the existing simulation outputs to check derived signs and orders, while
    keeping truth-based quantities out of the estimator and parameter selection.
 
-The present evidence supports continuing with the teacher-notes GP contraction.
-It does not yet justify attributing the observed residual to EIV alone, adding a
-fixed curvature correction, or calling the conditional GP posterior band a
-frequentist confidence tube.
+The present evidence supports continuing with the teacher-notes contraction
+geometry and the Dunson--Wu GP regression rule. It does not yet justify
+attributing the observed residual to EIV alone, adding a fixed curvature
+correction, or calling the conditional GP posterior band a frequentist
+confidence tube.
