@@ -64,6 +64,18 @@ honest true-manifold confidence theorem. A maximum half-width below
 `1.96*sigma` also does not imply geometric containment; containment is
 checked from the dense band boundaries.
 
+## Representative fitted bands
+
+The right panels compare the true manifold (black), fitted GP image (blue), finite-grid GP band (translucent blue), and the `1.96*sigma` observation-noise reference band (grey).
+
+![Circle GP fit and band](circle_notes_gp_contraction.png)
+
+**Circle, replicate 0.** The title reports whether the band covers the truth, lies inside the noise band, and its relative maximum half-width.
+
+![Ellipse GP fit and band](ellipse_notes_gp_contraction.png)
+
+**Ellipse, replicate 0.** The same three diagnostics appear in the title. These representative plots do not replace the Monte Carlo coverage rates above.
+
 ## Neighborhood diagnostics
 
 | manifold | mean median cylinder n | minimum cylinder n | ball fallback fraction | cylinder fallback fraction | high-curvature GP improvement |
